@@ -1,0 +1,129 @@
+name: Uptime
+# Self-owned uptime monitoring (replaces the third-party monitor idea).
+# Runs OUTSIDE everything it watches — not on Fly, not on Netlify, not on a
+# home machine — because the July 2026 incident's lesson was that the system
+# cannot be trusted to report its own death.
+#
+# Alert channels, layered by fate:
+#   1. A failing run makes GitHub email the owner (works when everything else is down).
+#   2. An "incident" issue opens per downed site and closes itself on recovery,
+#      so issue history doubles as an incident log with durations.
+#   3. Best-effort: an urgent task lands in Focus — skipped gracefully when
+#      Focus itself is the casualty.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe, alert, record
+        uses: actions/github-script@v7
+        env:
+          FOCUS_TOKEN: ${{ secrets.FOCUS_TOKEN }}
+        with:
+          script: |
+            const SITES = [
+              { name: "Focus API",           url: "https://focus-api-ives101.fly.dev/api/v1/health" },
+              { name: "Focus app",           url: "https://task-focus-flow.netlify.app/" },
+              { name: "American Muffler",    url: "https://www.americanmufflerandtowing.com/" },
+              { name: "iLights Modern",      url: "https://ilightsmodern.com/" },
+              { name: "XOLBY",               url: "https://xolby.com/" },
+              { name: "Truth In Beauty",     url: "https://truthinbeauty.love/" },
+              { name: "Rachelle's Cleaning", url: "https://rachellescleaningservice.com/" },
+              { name: "Lena's Wreath Decor", url: "https://lenaswreathdecor.com/" },
+              { name: "American Homes",      url: "https://americanhomestexas.com/" },
+            ];
+            const FOCUS_API = "https://focus-api-ives101.fly.dev/api/v1";
+            const ALERTS_LIST = "31db55a2-e39e-411a-82f7-1b0c396794c8"; // Role Coverage / Alerts
+
+            async function probe(url) {
+              let last = "unknown";
+              for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                  const ctl = new AbortController();
+                  const timer = setTimeout(() => ctl.abort(), 20000);
+                  const res = await fetch(url, { signal: ctl.signal, redirect: "follow" });
+                  clearTimeout(timer);
+                  if (res.status < 400) return { ok: true, code: res.status };
+                  last = res.status;
+                } catch (e) {
+                  last = String((e.cause && e.cause.code) || e.name || e);
+                }
+                if (attempt < 3) await new Promise((r) => setTimeout(r, 5000));
+              }
+              return { ok: false, code: last };
+            }
+
+            const results = [];
+            for (const site of SITES) results.push({ ...site, ...(await probe(site.url)) });
+            for (const r of results) core.info(`${r.ok ? "OK  " : "DOWN"} ${r.name} (${r.code})`);
+
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner, repo: context.repo.repo,
+                name: "incident", color: "d73a4a",
+                description: "A monitored site is down; closes on recovery",
+              });
+            } catch (e) { /* exists */ }
+
+            const { data: openIssues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: "open", labels: "incident",
+            });
+            const down = results.filter((r) => !r.ok);
+
+            for (const r of down) {
+              const title = `DOWN: ${r.name}`;
+              if (!openIssues.some((i) => i.title === title)) {
+                const issue = await github.rest.issues.create({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  title, labels: ["incident"],
+                  body: `${r.url} is failing (last result: ${r.code}).\n\nOpened by the uptime probe; it closes automatically when the site recovers, so this issue's open duration is the outage duration.`,
+                });
+                if (process.env.FOCUS_TOKEN) {
+                  try {
+                    await fetch(`${FOCUS_API}/lists/${ALERTS_LIST}/tasks`, {
+                      method: "POST",
+                      headers: { Authorization: `Bearer ${process.env.FOCUS_TOKEN}`, "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        title: `DOWN: ${r.name}`,
+                        description: `${r.url} failing (last result: ${r.code}).\nIncident: ${issue.data.html_url}\nFiled by the uptime monitor.`,
+                        priority: "urgent",
+                      }),
+                    });
+                  } catch (e) {
+                    core.warning(`Focus alert failed — Focus may be the casualty: ${e}`);
+                  }
+                }
+              }
+            }
+
+            for (const issue of openIssues) {
+              const site = results.find((r) => `DOWN: ${r.name}` === issue.title);
+              if (site && site.ok) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: issue.number, body: `Recovered (${site.code}).`,
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: issue.number, state: "closed",
+                });
+              }
+            }
+
+            if (down.length) {
+              core.setFailed(`${down.length} site(s) down: ${down.map((r) => r.name).join(", ")}`);
+            }
