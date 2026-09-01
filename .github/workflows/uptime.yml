@@ -43,7 +43,6 @@ jobs:
               { name: "Truth In Beauty",     url: "https://truthinbeauty.love/" },
               { name: "Rachelle's Cleaning", url: "https://rachellescleaningservice.com/" },
               { name: "Lena's Wreath Decor", url: "https://lenaswreathdecor.com/" },
-              { name: "American Homes",      url: "https://americanhomestexas.com/" },
             ];
             const FOCUS_API = "https://focus-api-ives101.fly.dev/api/v1";
             const ALERTS_LIST = "31db55a2-e39e-411a-82f7-1b0c396794c8"; // Role Coverage / Alerts
