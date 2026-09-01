@@ -22,7 +22,7 @@ report its own death.
 
 **Monitored:** Focus API (Fly), Focus app (Netlify), American Muffler &
 Towing, iLights Modern, XOLBY, Truth In Beauty, Rachelle's Cleaning Service,
-Lena's Wreath Decor, American Homes — the list lives at the top of the
+Lena's Wreath Decor — the list lives at the top of the
 workflow; adding a site is one line.
 
 This repo is public on purpose: it contains only public URLs, and public
